@@ -1,7 +1,18 @@
 gfy_bot
 =======
 
-GFY bot written in Ruby using reddits Snoo wrapper. It crawls through the comments on Reddit and looks for GIF images, then replies with a gfycat.com mirror link.
+A ruby based bot built upon the Snoo wrapper and powered by Openshift cloud. It crawls through link posts, self posts and comments on *one or more given subs* at *set intervals* and looks for GIF images. These images are then uploaded to gfycat.com and the compressed gfycat link is posted as a comment in reply to the original post/comment.  Here's an example:
+
+>---
+
+>GFY link: [gfycat.com/OpulentEagerBeauceron](http://gfycat.com/OpulentEagerBeauceron)
+
+>---
+
+> GIF size: 1.67 MiB | GFY size:375.97 kiB | [~ About](http://www.reddit.com/r/gfycat/comments/1u5df2/made_a_gfy_bot_for_reddit_in_ruby_meet_ugfy_bot/)
+
+>---
+
 
 Contribute
 ==========
