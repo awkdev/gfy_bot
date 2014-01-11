@@ -7,6 +7,7 @@ class GfyBot
 	require 'cgi'
 	require 'time'
 	require 'filesize'
+	require 'hawk'
 
 	# ====================================
 	# NOTHING WILL BE UPLOADED TO GFYCAT OR
@@ -26,7 +27,7 @@ class GfyBot
 		@password = args[:password] || raise(ArgumentError.new("Please provide a password for bot's Reddit account while initializing"))
 		@time_interval = args[:time_interval] || 5
 		@subreddits = args[:subreddits] || ['thisismyspace']
-		@limit = 100 # no. of posts/comments to fetch in one go
+		@limit = 150 # no. of posts/comments to fetch in one go
 
 		# Name of the bot using Snoo Reddit API wrapper
 		@gfybot = Snoo::Client.new
@@ -98,6 +99,7 @@ class GfyBot
 
 	# Log the time and ID of the latest comment & post fetched from Reddit. If no new comments or posts were fetched, log the one's in @param
 	def logLastCrawled(comments, posts)
+		return false if DEBUG
 		# Now that we've read the old params and done, write the current timestamp to file.
 		logTime
 		# Log latest comment and post IDs
@@ -172,10 +174,38 @@ class GfyBot
 
 ---
 
-^(#{gif_size}) ^| ^(#{gfy_size}) ^| [^(~ About)](http://www.reddit.com/r/gfybot)
+^(#{gif_size}) ^| ^(#{gfy_size}) ^| [^(~ About)](http://www.reddit.com/r/gfycat/comments/1u5df2/made_a_gfy_bot_for_reddit_in_ruby_meet_ugfy_bot/)
 FOOTER
 		comment + footer
 	end
+
+	# If you use the ID of a deleted comment/post on to fetch new comment/posts made "after" that date, it wont show any new comments/posts.
+	# TL;DR - bot goes for a toss. So this function fixes it by checking if the item (comment or post) has been deleted. Call this everytime 0 links are found.
+	# Get item info by using this URL: http://www.reddit.com/r/all/api/info.json?id=t3_1us4t4
+	# Check the author. If it is [deleted], return the id of first post/comment from sub/new else return the
+	# https://github.com/awkdev/gfy_bot/issues/5
+	def checkDeletedItem(id)
+		# Check if item is a post or comment
+		is_post = id.include?('t1_') ? false : true
+		puts "Didn't find any new #{is_post ? 'post' : 'comment' } so it's probably an ID issue. Getting new ID..."
+
+		sleep(2)
+		url = "/r/#{@subreddits.join('+')}/"
+		if is_post # this is a post
+			url += 'new.json?limit=1'
+		else # this is a comment
+			url += 'comments.json?limit=1'
+		end
+		latest_item = getJSON('www.reddit.com',url)
+		latest_item = latest_item['data']['after']
+		if is_post
+			@params['last_post'] = latest_item
+		else
+			@params['last_comment'] = latest_item
+		end
+		puts 'Logging latest_item ' + latest_item
+	end
+
 
 	# Main handler function which handles the bot and links all functions together
 	# ============================================================================
@@ -205,6 +235,8 @@ FOOTER
 		# GET Posts
 		posts = getJSON(reddit, url)
 		posts = posts['data']['children']
+		# If it fetches 0 posts, then it means something is def wrong with the @params['last_post'], so just get a new id
+		checkDeletedItem(@params['last_post']) if posts.empty?
 
 		# URL for comments
 		url = "/r/#{subs}/comments.json?limit=#{@limit}"
@@ -212,6 +244,8 @@ FOOTER
 		# GET Comments
 		comments = getJSON(reddit, url)
 		comments = comments['data']['children']
+		# If it fetches 0 comments, then it means something is def wrong with the @params['last_comment'], so just get a new id
+		checkDeletedItem(@params['last_comment']) if comments.empty?
 
 		# Log current time
 		@current_time = Time.now
@@ -237,7 +271,7 @@ FOOTER
 			@links << { :links => links, :id => comment['name'] } unless links.empty?
 		end
 
-		puts 'Found ' + @links.length.to_s + ' links on /r/' + subs
+		puts 'Found ' + @links.length.to_s + '/' + (posts.length+comments.length).to_s + ' links on /r/' + subs
 
 		if @links.empty?
 			# Log the last crawled comment and post, so next time we ONLY get the posts and comments posted after that.
@@ -263,14 +297,19 @@ FOOTER
 				upload_url = @gfyurl + CGI::escape(gif)
 				gfy = {}
 				gfy = getJSON(@gfydom, upload_url)  unless DEBUG
-				gfy_links << gfy
-				# TODO: Timer
-				sleep(10)
+				if gfy['error']
+					puts "Requested to: #{upload_url} \n Got This: #{gfy.to_s}"
+				else
+					gfy_links << gfy
+				end
+				sleep(30)
 			end
-			comment = generateCommentBody(gfy_links)
-			puts 'Posting comment to ' + link[:id]
-			@gfybot.comment(comment, link[:id])  unless DEBUG
-			sleep(5)
+			unless gfy_links.empty?
+				comment = generateCommentBody(gfy_links)
+				puts 'Posting comment to ' + link[:id]
+				@gfybot.comment(comment, link[:id])  unless DEBUG
+				sleep(5)
+			end
 		end
 		puts 'All done. Exiting. BuhBuye!'
 	end
@@ -280,9 +319,12 @@ FOOTER
 	end
 end
 
+subs = 'bakchodi'
+
 options = {
 		:username => 'gfy_bot',
-		:password => 'xxxxxxxxxxxx',
+		:password => 'xxxxxxxxxxxxxxxxx',
+		:subreddits	=> subs.split(',')
 }
 gfy_bot = GfyBot.new(options)
 
