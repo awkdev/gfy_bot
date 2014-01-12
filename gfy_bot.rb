@@ -8,6 +8,7 @@ class GfyBot
 	require 'time'
 	require 'filesize'
 	require 'hawk'
+	require 'httparty'
 
 	# ====================================
 	# NOTHING WILL BE UPLOADED TO GFYCAT OR
@@ -25,6 +26,8 @@ class GfyBot
 	def initialize(args = {})
 		@username = args[:username] || raise(ArgumentError.new("Please provide a username for bot's Reddit account while initializing"))
 		@password = args[:password] || raise(ArgumentError.new("Please provide a password for bot's Reddit account while initializing"))
+		@hawk_id = args[:hawk_id] || 'xyz'
+		@hawk_key = args[:hawk_key] || 'xyz'
 		@time_interval = args[:time_interval] || 5
 		@subreddits = args[:subreddits] || ['thisismyspace']
 		@limit = 150 # no. of posts/comments to fetch in one go
@@ -64,7 +67,7 @@ class GfyBot
 	end
 
 	# The logfile contains 3 lines, both a key/value pair separated by a tilde ( ~ ) sign. So we extract it into a ruby hash for our use
-	# ------- raw logfile --------
+	# ------- raw logfile ------------------------
 	# time~2014-01-01 12:16:09 +0530
 	# last_comment~t1_c3c3c3c3
 	# last_post~t3_cc2c2c2
@@ -74,6 +77,7 @@ class GfyBot
 	#	:last_comment => 't1_c3c3c3c3'
 	#	:last_post => 't3_cc2c2c2'
 	# }
+	# --------------------------------------------
 	def readLogFile
 		File.readlines(@file).each do |line|
 			key = line.split('~').first
@@ -168,10 +172,7 @@ class GfyBot
 			gfy_size = 'Combined GFY size: ' + Filesize.from(gfy_size.to_s + 'B').pretty
 			comment = comment.join(' | ')
 		end
-
 		footer = <<FOOTER
-
-
 ---
 
 ^(#{gif_size}) ^| ^(#{gfy_size}) ^| [^(~ About)](http://www.reddit.com/r/gfycat/comments/1u5df2/made_a_gfy_bot_for_reddit_in_ruby_meet_ugfy_bot/)
@@ -206,6 +207,37 @@ FOOTER
 		puts 'Logging latest_item ' + latest_item
 	end
 
+	# Generate Hawk Mac to authenticate to gfycat.com/api
+	def getHawkMac(link)
+		options = {
+				:credentials =>
+						{
+								:id => @hawk_id,
+								:key => @hawk_key,
+								:algorithm => "sha256"
+						},
+				:method => "GET",
+				:host => "api.gfycat.com",
+				:port => 80,
+				:request_uri => "/transcode?fetchUrl=#{link}"
+		}
+		Hawk::Client.build_authorization_header(options)
+	end
+
+	# Main function which uploads to gfycat using HAWK, and if that fails, using normal API. returns gfy hash
+	def uploadToGfycat(gif)
+		mac = getHawkMac(gif)
+		hawk_URL = 'http://api.gfycat.com/transcode?fetchUrl=' + CGI::escape(gif)
+		getGfy = HTTParty.get(hawk_URL, :headers => { 'Authorization' => mac })
+		if getGfy.response.header.code.to_i == 200
+			JSON.parse(getGfy.response.body)
+		else
+			puts 'Hawk Authentication failed with URL: '+ gif
+			normal_URL = @gfyurl + CGI::escape(gif)
+			getJSON(@gfydom, normal_URL)
+			sleep(20)
+		end
+	end
 
 	# Main handler function which handles the bot and links all functions together
 	# ============================================================================
@@ -294,15 +326,14 @@ FOOTER
 			# }
 			gfy_links = []
 			link[:links].each do |gif|
-				upload_url = @gfyurl + CGI::escape(gif)
 				gfy = {}
-				gfy = getJSON(@gfydom, upload_url)  unless DEBUG
+				gfy = uploadToGfycat(gif)  unless DEBUG
 				if gfy['error']
-					puts "Requested to: #{upload_url} \n Got This: #{gfy.to_s}"
+					puts "Couldn't upload #{gif}: #{gfy.to_s}"
 				else
 					gfy_links << gfy
 				end
-				sleep(30)
+				sleep(7)
 			end
 			unless gfy_links.empty?
 				comment = generateCommentBody(gfy_links)
@@ -318,16 +349,17 @@ FOOTER
 		@links
 	end
 end
+# ======= CLASS ENDS ===========
 
 subs = 'bakchodi'
 
 options = {
 		:username => 'gfy_bot',
-		:password => 'xxxxxxxxxxxxxxxxx',
+		:password => 'xxxxxxxx',
+		:hawk_id => 'xxxx',
+		:hawk_key => 'xxxxxxxxx',
 		:subreddits	=> subs.split(',')
 }
 gfy_bot = GfyBot.new(options)
 
 links = gfy_bot.start
-
-puts 'Done'
