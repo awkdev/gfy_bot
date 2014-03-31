@@ -14,7 +14,7 @@ class GfyBot
 	# NOTHING WILL BE UPLOADED TO GFYCAT OR
 	# POSTED TO REDDIT IF DEBUG IS SET TO TRUE.
 	# =====================================
-	DEBUG = true
+	DEBUG = false
 
 	# Initialize the bot with a hash containing basic params as given below:
 	# :args => {
@@ -31,6 +31,7 @@ class GfyBot
 		@time_interval = args[:time_interval] || 5
 		@subreddits = args[:subreddits] || ['thisismyspace']
 		@limit = 150 # no. of posts/comments to fetch in one go
+		@blockedUsers = ['imgurHostBot']
 
 		# Name of the bot using Snoo Reddit API wrapper
 		@gfybot = Snoo::Client.new
@@ -50,11 +51,13 @@ class GfyBot
 		# @links = [
 		#		{
 		#				:links => ['http://imgur.com/test.gif'],
-		#				:id => 't1_c3c3c3c3'
+		#				:id => 't1_c3c3c3c3',
+		#				:subreddit => 'India'
 		#		},
 		#		{
 		#				:links => ['http://imgur.com/test2.gif'],
-		#				:id => 't2_c3c3c3c3'
+		#				:id => 't2_c3c3c3c3',
+		# 				:subreddit => 'AskReddit'
 		#		}
 		# ]
 		@links = []
@@ -67,7 +70,7 @@ class GfyBot
 	end
 
 	# The logfile contains 3 lines, both a key/value pair separated by a tilde ( ~ ) sign. So we extract it into a ruby hash for our use
-	# ------- raw logfile ------------------------
+	# ----------------- raw logfile --------------
 	# time~2014-01-01 12:16:09 +0530
 	# last_comment~t1_c3c3c3c3
 	# last_post~t3_cc2c2c2
@@ -91,7 +94,6 @@ class GfyBot
 	def check_time_interval
 		@params['time'] ? (Time.now - Time.parse(@params['time']))/60 : @time_interval
 	end
-
 
 	# Add timestamp to the logfile in the format:
 	# time~2014-01-01 12:16:09 +0530
@@ -123,7 +125,6 @@ class GfyBot
 		end
 	end
 
-
 	# Get page using net/http.
 	# parse json
 	# return only relevant data
@@ -132,7 +133,6 @@ class GfyBot
 		JSON.parse(page.body)
 	end
 
-	#
 	def linkExtract(raw_reddit_html)
 		raw_reddit_html = raw_reddit_html.to_s
 		return [] if raw_reddit_html.length < 2
@@ -172,7 +172,10 @@ class GfyBot
 			gfy_size = 'Combined GFY size: ' + Filesize.from(gfy_size.to_s + 'B').pretty
 			comment = comment.join(' | ')
 		end
+		# DONT REMOVE THE EXTRA BLANK LINES
 		footer = <<FOOTER
+
+
 ---
 
 ^(#{gif_size}) ^| ^(#{gfy_size}) ^| [^(~ About)](http://www.reddit.com/r/gfycat/comments/1u5df2/made_a_gfy_bot_for_reddit_in_ruby_meet_ugfy_bot/)
@@ -281,6 +284,7 @@ FOOTER
 
 		# Log current time
 		@current_time = Time.now
+		puts 'Starting crawl at: ' + @current_time.to_s
 
 		# Process posts
 		posts.each do |post|
@@ -293,14 +297,16 @@ FOOTER
 				links.concat(gifLinkExtract([post['url']]))
 			end
 
-			@links << { :links => links, :id => post['name'] } unless links.empty?
+			@links << { :links => links, :id => post['name'], :subreddit => post['subreddit'] } unless links.empty?
 		end
 
 		# Process comments
 		comments.each do |comment|
 			comment = comment['data']
+			# If the comment is from one of the blocked users, go to next loop.
+			break if @blockedUsers.include?(comment['author'])
 			links = gifLinkExtract(linkExtract(comment['body_html']))
-			@links << { :links => links, :id => comment['name'] } unless links.empty?
+			@links << { :links => links, :id => comment['name'], :subreddit => comment['subreddit']  } unless links.empty?
 		end
 
 		puts 'Found ' + @links.length.to_s + '/' + (posts.length+comments.length).to_s + ' links on /r/' + subs
@@ -322,8 +328,14 @@ FOOTER
 			# NOTICE that even link is a hash at this moment, because one comment can have more than one GIFs
 			# links = {
 			#		:links => ['http...', 'http...']
-			#		:id => 't1_c3c3c3c'
+			#		:id => 't1_c3c3c3c',
+			#		:subreddit => 'AskReddit'
 			# }
+
+			# Special request by /r/CinemaGraphs to not post replies to gifs in comments. Just the posts.
+			# Check if sub is cinemagraphs and the id has t1_ in it (template of a comment id)
+			#break if link[:subreddit].downcase == 'cinemagraphs' && link[:id].include?('t1_')
+
 			gfy_links = []
 			link[:links].each do |gif|
 				gfy = {}
@@ -331,7 +343,10 @@ FOOTER
 				if gfy['error']
 					puts "Couldn't upload #{gif}: #{gfy.to_s}"
 				else
-					gfy_links << gfy
+					# Upload only if the difference between gfy and gif is >50kB
+					if ((gfy['gifSize'].to_i - gfy['gfysize'].to_i) / 1024) > 50
+						gfy_links << gfy
+					end
 				end
 				sleep(7)
 			end
@@ -339,25 +354,25 @@ FOOTER
 				comment = generateCommentBody(gfy_links)
 				puts 'Posting comment to ' + link[:id]
 				@gfybot.comment(comment, link[:id])  unless DEBUG
-				sleep(5)
+				sleep(8)
 			end
 		end
 		puts 'All done. Exiting. BuhBuye!'
 	end
-
 	def getlinks
 		@links
 	end
 end
-# ======= CLASS ENDS ===========
+# ====== CLASS ENDS ========
+# List of subs
+subs = 'bakchodi,BreakingBad,circlejerk,Cricket,Dota2,DunderMifflin,EnoughInternet,fifthworldshibe,freiburg,GTA,howtonotgiveafuck,India,ImGoingToHellForThis,KerbalSpaceProgram,meanjokes,pcgamingtechsupport,SNSD,supershibe,tf2,tifu,toosoon,WastedGifs,WhatCouldgoWrong,woahdude'
 
-subs = 'bakchodi'
-
+# Params for the bot
 options = {
 		:username => 'gfy_bot',
-		:password => 'xxxxxxxx',
-		:hawk_id => 'xxxx',
-		:hawk_key => 'xxxxxxxxx',
+		:password => '',
+		:hawk_id => '',
+		:hawk_key => '',
 		:subreddits	=> subs.split(',')
 }
 gfy_bot = GfyBot.new(options)
