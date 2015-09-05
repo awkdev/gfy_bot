@@ -1,7 +1,7 @@
 gfy_bot
 =======
 
-A ruby based bot built upon the Snoo wrapper and powered by Openshift cloud. It crawls through link posts, self posts and comments on *one or more given subs* at *set intervals* and looks for GIF images. These images are then uploaded to gfycat.com and the compressed gfycat link is posted as a comment in reply to the original post/comment.  Here's an example:
+A ruby based bot built upon the Snoo wrapper and powered by Azure cloud. It crawls through link posts, self posts and comments on *one or more given subs* at *set intervals* and looks for GIF images. These images are then uploaded to gfycat.com and the compressed gfycat link is posted as a comment in reply to the original post/comment.  Here's an example:
 
 >---
 
@@ -36,4 +36,3 @@ Donate
 
 If you like my work ( or me in general ) feel free to buy me a beer! 
  - *PayPal: awkdev [at] gmail [dot] com*
- - *Bitcoin: 1FLrBNBkVZT1QN4d1H2Kv7i9S6W8fpE5ft*

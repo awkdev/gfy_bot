@@ -1,14 +1,18 @@
-class GfyBot
+class WoahdudeBot
 	# List of required Gems
 	require 'snoo'
 	require 'json'
 	require 'nokogiri'
 	require 'net/http'
+	require 'open-uri'
 	require 'cgi'
 	require 'time'
 	require 'filesize'
 	require 'hawk'
 	require 'httparty'
+	require 'action_view'
+
+	include ActionView::Helpers::NumberHelper
 
 	# ====================================
 	# NOTHING WILL BE UPLOADED TO GFYCAT OR
@@ -28,14 +32,11 @@ class GfyBot
 		@password = args[:password] || raise(ArgumentError.new("Please provide a password for bot's Reddit account while initializing"))
 		@hawk_id = args[:hawk_id] || 'xyz'
 		@hawk_key = args[:hawk_key] || 'xyz'
-		@time_interval = args[:time_interval] || 5
+		@time_interval = args[:time_interval] || 2
 		@subreddits = args[:subreddits] || ['thisismyspace']
-		@limit = 150 # no. of posts/comments to fetch in one go
+		@limit = 20 # no. of posts/comments to fetch in one go
 		@blockedUsers = ['imgurHostBot']
 		@nsfw_subs = args[:nsfw_subs]
-
-		# Name of the bot using Snoo Reddit API wrapper
-		@gfybot = Snoo::Client.new
 
 		# GFY Upload URL using the API. Returns a JSON
 		# http://upload.gfycat.com/transcode?fetchUrl=http%3A%2F%2Fi.imgur.com%2FCXE9FRs.gif
@@ -43,7 +44,7 @@ class GfyBot
 		@gfyurl = '/transcode?fetchUrl='
 
 		# The logger file contains runtime details from the last crawl. This function reads the file and saves imp details in params hash
-		@file = 'logfile.txt'
+		@file = 'logfile-woahdude.txt'
 		@params = {}
 		@current_time = nil
 		initializeParams
@@ -62,6 +63,42 @@ class GfyBot
 		#		}
 		# ]
 		@links = []
+
+		# If we have modhash and cookie, use it to login or create new session
+		if @params['modhash'].nil? && @params['cookies'].nil?
+			bot_options = {
+					:username => @username,
+					:password => @password,
+			}
+			puts 'No cookie found. Logging in'
+		else
+			bot_options = {
+					:modhash => @params['modhash'],
+					:cookies => @params['cookies']
+			}
+			puts 'Logging in via cookie'
+
+		end
+		# Name of the bot using Snoo Reddit API wrapper
+		@gfybot = Snoo::Client.new(bot_options)
+		if @gfybot.cookies.nil?
+			if bot_options[:cookies].nil?
+				puts 'Unable to login. Pls fix'
+				exit!
+			else
+				@gfybot = Snoo::Client.new({
+																			 :username => @username,
+																			 :password => @password,
+																	 })
+
+				@params['modhash'] = @gfybot.modhash
+				@params['cookies'] = @gfybot.cookies
+				puts 'cookie didnt work. logged in again'
+			end
+		else
+			@params['modhash'] = @gfybot.modhash
+			@params['cookies'] = @gfybot.cookies
+		end
 	end
 
 	# Reads the logfile saved on disc which contains few runtime details gathered from the last run of the bot. If the file does not exist, create it.
@@ -102,6 +139,7 @@ class GfyBot
 	def logTime(args = {:old => false})
 		time = args[:old] ? Time.at(0) : @current_time
 		File.open(@file, 'w'){|f| f.write('time~' + time.to_s + "\n") }
+		File.open(@file, 'a') {|f| f.write('modhash~' + @params['modhash'].to_s + "\n" + 'cookies~' + @params['cookies'].to_s + "\n") }
 	end
 
 	# Log the time and ID of the latest comment & post fetched from Reddit. If no new comments or posts were fetched, log the one's in @param
@@ -110,20 +148,9 @@ class GfyBot
 		# Now that we've read the old params and done, write the current timestamp to file.
 		logTime
 		# Log latest comment and post IDs
-		comment_id = comments.empty? ? @params['last_comment'] : comments.first['data']['name']
+		# comment_id = comments.empty? ? @params['last_comment'] : comments.first['data']['name']
 		post_id = posts.empty? ? @params['last_post'] : posts.first['data']['name']
-		File.open(@file, 'a') {|f| f.write('last_comment~' + comment_id.to_s + "\n" + 'last_post~' + post_id.to_s) }
-	end
-
-	# Login the bot to Reddit using Snoo API
-	def login
-		if @gfybot.log_in(@username, @password)
-			puts 'Logged in to Reddit successfully'
-			true
-		else
-			puts 'Could not login to Reddit. Please check the username/pass/internetconnection and try again'
-			false
-		end
+		File.open(@file, 'a') {|f| f.write('last_post~' + post_id.to_s) }
 	end
 
 	# Get page using net/http.
@@ -144,8 +171,24 @@ class GfyBot
 	# Extract array of links in a comment/self-post/thread
 	# Returns an array of GIF links
 	def gifLinkExtract(links)
-		# Only return links which end in .gif and do not contain gfycat.com
-		links.select {|link| link.downcase.include?('.gif') && !link.include?('.gifv') && !link.include?('gfycat.com')}
+		gif_links = []
+		links.each do |link|
+			if link.include?('imgur.com')
+				gif_links << extractImgurGif(link)
+			elsif link.downcase.include?('.gif')
+				gif_links << link
+			end
+		end
+		gif_links.compact
+	end
+
+	def extractImgurGif(link)
+		match_result = link.match(/imgur\.com\/([\w\d]+)(\.(jpg|gif|png|JPG|GIF|PNG))?/)
+		unless match_result.nil?
+			imgur_response = open(link)
+			return "http://i.imgur.com/#{match_result[1]}.gif" if imgur_response.content_type == 'image/gif'
+		end
+		nil
 	end
 
 	# Accepts unique gfycat name and returns a complete URL.
@@ -154,32 +197,37 @@ class GfyBot
 	end
 
 	# Generate the comment body as markdown text to be posted on reddit.
-	# Accepts an array hashes, containing of gfy links and imgur gifv links.
-	def generateCommentBody(links, nsfw)
-		comment = "It's #{Date.today.year}! Use HTML5 optimized video formats instead of GIF.\n\n"
-		gif_size = 0
-		gfy_size = 0
-		links.each_with_index do |link, index|
-			counter = links.length > 1 ? " #{index+1}" : ''
-			nsfw_text = nsfw ? '(NSFW)' : ''
-			if link[:imgur_link]
-				comment << "* [Imgur Gifv link#{counter}](#{link[:gifv_link]}) #{nsfw_text}  \n"
-			else
-				comment << "* [GFY link#{counter}](#{genGfyLink(link['gfyname'])}) #{nsfw_text}  \n"
+	# Accepts an array hashes, containing of gfy links.
+	def generateCommentBody(links, author)
+		if links.length == 1
+			unless links.first['gifSize'].nil?
+				gif_size = links.first['gifSize'].to_i
+				gfy_size = links.first['gfysize'].to_i
+				percent = ((gfy_size.to_f/gif_size)*100).to_i.to_s + "%"
+				stats = "GIF size:#{number_to_human_size(gif_size)} | HTML5 size:#{number_to_human_size(gfy_size)} | HTML5 is #{percent} of the original GIF\n"
 			end
-			gif_size += link['gifSize'].to_i
-			gfy_size += link['gfysize'].to_i
+
+			if links.first[:imgur_link]
+				link = links.first[:link]
+			else
+				link = genGfyLink(links.first['gfyname'])
+			end
+			comment = <<BODY
+Hi #{author},\s\s
+Your GIF submission has been removed because we've decided to move on from these ancient, slow-loading GIFs to blazing-fast HTML5.
+
+Feel free to re-submit this HTML5 version of your GIF: **#{link}**\s\s
+#{stats.to_s}
+
+---
+
+^(**About HTML5 videos**: GIFs is an old format meant for small images with short loops. They are not for big long video clips as they are often now being misused for, and as a result they're often bloated and take forever to load. Browsing woahdude has become intolerable on some devices because of unnecessarily enormous GIFs.)
+
+^(On the other hand, HTML5 is almost 5% the file size of a GIF. It loads way faster and you can pause, move frame-by-frame or reverse it with one click.) [^Read ^More](http://www.reddit.com/r/woahdude/comments/266gf8/its_2014_can_we_stop_using_gifs_already/)
+
+BODY
+			comment
 		end
-
-		combined_text = links.length > 1 ? 'Combined' : ''
-		gif_size = "#{combined_text} GIF size: " + Filesize.from(gif_size.to_s + 'B').pretty unless gif_size == 0
-		gfy_size = "#{combined_text} GFY size: " + Filesize.from(gfy_size.to_s + 'B').pretty unless gfy_size == 0
-
-		footer = "\n---\n\n"
-		footer += "^(#{gif_size}) ^| " unless gif_size == 0
-		footer += "^(#{gfy_size}) ^| " unless gfy_size == 0
-		footer += '[^(~ About)](http://www.reddit.com/r/gfycat/comments/1u5df2/made_a_gfy_bot_for_reddit_in_ruby_meet_ugfy_bot/)'
-		comment + footer
 	end
 
 	# If you use the ID of a deleted comment/post on to fetch new comment/posts made "after" that date, it wont show any new comments/posts.
@@ -244,14 +292,9 @@ class GfyBot
 	# Main handler function which handles the bot and links all functions together
 	# ============================================================================
 	# A) LINKS & SELF POSTS
-	# 1. Crawl the subs for links and self posts --- /r/sub1+sub2/new.json?before=id
+	# 1. Crawl the subs for links --- /r/sub1+sub2/new.json?before=id
 	# 2. If link post send to -> gifExtract as array (extend to imgur albums in future)
-	# 3. If self post get self_html and send to -> linkExtract then to -> gifExtract
-	# 4. All above return an array of gif links. Save it in @links along with their IDs so we can post a reply
-
-	# B) COMMENTS
-	# 1. Crawl the subs for comments
-	# 2. Then follow steps 3 & 4 from above
+	# 3. All above return an array of gif links. Save it in @links along with their IDs so we can post a reply
 
 	# Once we have @links ready, start uploading to gfycat.com using the API and post reply to Reddit as comment
 	def start
@@ -265,21 +308,12 @@ class GfyBot
 
 		# URL for Posts
 		url = "/r/#{subs}/new.json?limit=#{@limit}"
-		url += "&before=#{@params['last_post']}" unless @params['last_post'].nil?
+		# url += "&before=#{@params['last_post']}" unless @params['last_post'].nil?
 		# GET Posts
 		posts = getJSON(reddit, url)
 		posts = posts['data']['children']
 		# If it fetches 0 posts, then it means something is def wrong with the @params['last_post'], so just get a new id
-		checkDeletedItem(@params['last_post']) if posts.empty?
-
-		# URL for comments
-		url = "/r/#{subs}/comments.json?limit=#{@limit}"
-		url += "&before=#{@params['last_comment']}" unless @params['last_comment'].nil?
-		# GET Comments
-		comments = getJSON(reddit, url)
-		comments = comments['data']['children']
-		# If it fetches 0 comments, then it means something is def wrong with the @params['last_comment'], so just get a new id
-		checkDeletedItem(@params['last_comment']) if comments.empty?
+		# checkDeletedItem(@params['last_post']) if posts.empty?
 
 		# Log current time
 		@current_time = Time.now
@@ -289,50 +323,28 @@ class GfyBot
 		posts.each do |post|
 			post = post['data']
 			links = []
-			next if post['subreddit'].downcase == 'woahdude'
+
 			nsfw = false
-			if post['is_self']
-				links.concat(gifLinkExtract(linkExtract(post['selftext_html'])))
-				# Check if the post exists on an NSFW sub of if the comment body explicityly says NSFW.
-				nsfw = post['selftext'].downcase.include?('nsfw') || @nsfw_subs.include?(post['subreddit'].downcase)
-			else
+			unless post['is_self']
 				links.concat(gifLinkExtract([post['url']]))
 				nsfw = @nsfw_subs.include?(post['subreddit'].downcase)
 			end
 
-			@links << { :links => links, :id => post['name'], :subreddit => post['subreddit'], :nsfw => nsfw } unless links.empty?
+			@links << {
+					:links => links,
+					:id => post['name'],
+					:subreddit => post['subreddit'],
+					:nsfw => nsfw,
+					:author => post['author']
+			} unless links.empty?
 		end
 
-		# Process comments
-		comments.each do |comment|
-			comment = comment['data']
-			# If the comment is from one of the blocked users, go to next loop.
-			break if @blockedUsers.include?(comment['author'])
-			links = gifLinkExtract(linkExtract(comment['body_html']))
+		puts 'Found ' + @links.length.to_s + '/' + (posts.length).to_s + ' links on /r/' + subs
 
-			# Check if the comment exists on an NSFW sub of if the comment body explicityly says NSFW.
-			if @nsfw_subs.include?(comment['subreddit']) || comment['body'].downcase.include?('nsfw')
-				nsfw = true
-			end
+		logLastCrawled(nil, posts)
 
-			@links << { :links => links, :id => comment['name'], :subreddit => comment['subreddit'], :nsfw => nsfw  } unless links.empty?
-		end
-
-		puts 'Found ' + @links.length.to_s + '/' + (posts.length+comments.length).to_s + ' links on /r/' + subs
-
-		if @links.empty?
-			# Log the last crawled comment and post, so next time we ONLY get the posts and comments posted after that.
-			logLastCrawled(comments, posts)
-		else
-			if login
-				# Log the last crawled comment and post, so next time we ONLY get the posts and comments posted after that.
-				logLastCrawled(comments, posts)
-			else
-				exit!
-			end
-		end
-
-		# Loop through the links and post comments now
+		# return false
+		# Loop through the links now
 		@links.each do |link|
 			# NOTICE that even link is a hash at this moment, because one comment can have more than one GIFs
 			# links = {
@@ -341,14 +353,8 @@ class GfyBot
 			#		:subreddit => 'AskReddit'
 			# 		:nsfw => true
 			# }
-
-			# Special request by /r/CinemaGraphs to not post replies to gifs in comments. Just the posts.
-			# Check if sub is cinemagraphs and the id has t1_ in it (template of a comment id)
-			#break if link[:subreddit].downcase == 'cinemagraphs' && link[:id].include?('t1_')
-
 			gfy_links = []
 			link[:links].each do |gif|
-				gfy = {}
 				if gif.match(/^.*imgur\.com\/[\w\d]+\.gif$/)
 					gfy_links << {
 							imgur_link: true,
@@ -356,26 +362,35 @@ class GfyBot
 					}
 					next
 				end
+				gfy = {}
 				gfy = uploadToGfycat(gif)  unless DEBUG
 				if gfy['error']
 					puts "Couldn't upload #{gif}: #{gfy.to_s}"
 				else
-					# Upload only if the difference between gfy and gif is >800kB
-					if ((gfy['gifSize'].to_i - gfy['gfysize'].to_i) / 1024) > 700
-						gfy_links << gfy
-					end
+					gfy_links << gfy
 				end
 				sleep(7)
 			end
 			unless gfy_links.empty?
-				comment = generateCommentBody(gfy_links, link[:nsfw])
+				comment = generateCommentBody(gfy_links, link[:author])
+				if !comment
+					puts "Couldn't generate comment for #{link[:id]}. Skipping..."
+					next
+				end
 				puts 'Posting comment to ' + link[:id]
-				@gfybot.comment(comment, link[:id])  unless DEBUG
-				sleep(8)
+				reddit_comment = @gfybot.comment(comment, link[:id])  unless DEBUG
+				@gfybot.remove(link[:id])
+				reddit_comment_id = nil
+				begin
+					reddit_comment_id = reddit_comment['json']['data']['things'].first['data']['id']
+				end
+				@gfybot.distinguish(reddit_comment_id) unless reddit_comment_id.nil?
+				sleep(5)
 			end
 		end
 		puts 'All done. Exiting. BuhBuye!'
 	end
+
 	def getlinks
 		@links
 	end
@@ -394,5 +409,5 @@ options = {
 		:subreddits	=> subs.split(','),
 		:nsfw_subs => nsfw_subs.downcase.split(',')
 }
-gfy_bot = GfyBot.new(options)
+gfy_bot = WoahdudeBot.new(options)
 gfy_bot.start
