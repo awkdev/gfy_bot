@@ -208,7 +208,7 @@ class WoahdudeBot
 			end
 
 			if links.first[:imgur_link]
-				link = links.first[:link]
+				link = links.first[:gifv_link]
 			else
 				link = genGfyLink(links.first['gfyname'])
 			end
